@@ -11,6 +11,8 @@ const eventsRouter = require('./routes/events');
 const betsRouter = require('./routes/bets');
 const leaguesRouter = require('./routes/leagues');
 const leaderboardRouter = require('./routes/leaderboard');
+const stripeRouter  = require('./routes/stripe');
+const accountRouter = require('./routes/account');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -18,20 +20,22 @@ const PORT = process.env.PORT || 3001;
 // ── Middleware ──────────────────────────────────────────────
 app.use(helmet());
 app.use(cors({ origin: process.env.CLIENT_URL, credentials: true }));
-app.use(express.json());
-
-app.use(rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 200,
-  standardHeaders: true,
-  legacyHeaders: false,
-}));
+app.use((req, res, next) => {
+  if (req.originalUrl === '/api/stripe/webhook') {
+    next();
+  } else {
+    express.json()(req, res, next);
+  }
+});
+app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 200 }));
 
 // ── Routes ──────────────────────────────────────────────────
 app.use('/api/events',      eventsRouter);
 app.use('/api/bets',        betsRouter);
 app.use('/api/leagues',     leaguesRouter);
 app.use('/api/leaderboard', leaderboardRouter);
+app.use('/api/stripe',      stripeRouter);
+app.use('/api/account',     accountRouter);
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', ts: new Date() }));
 
@@ -46,6 +50,6 @@ app.use((err, req, res, next) => {
 // ── Start ───────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`BetLeague API running on :${PORT}`);
-  // startOddsFetcher();
-  // startScoresSettler();
+  startOddsFetcher();
+  startScoresSettler();
 });

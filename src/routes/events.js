@@ -13,6 +13,7 @@ router.get('/', requireAuth, async (req, res, next) => {
       .from('events')
       .select('*')
       .eq('status', status)
+      .gte('commence_time', new Date().toISOString())
       .order('commence_time', { ascending: true });
 
     if (sport) query = query.eq('sport', sport);

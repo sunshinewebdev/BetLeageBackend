@@ -22,12 +22,12 @@ async function settleBetsForEvent(event) {
       settled_at: new Date().toISOString()
     }).eq('id', bet.id);
 
-    const isLeagueBet = !!bet.season_id;
+    const isLeagueBet = !!bet.league_id;
 
     if (result === 'won') {
       if (isLeagueBet) {
-        await supabase.rpc('adjust_balance', {
-          p_season_id: bet.season_id,
+        await supabase.rpc('adjust_league_balance', {
+          p_league_id: bet.league_id,
           p_user_id:   bet.user_id,
           p_amount:    bet.potential_payout,
         });
@@ -41,8 +41,8 @@ async function settleBetsForEvent(event) {
 
     if (result === 'pushed') {
       if (isLeagueBet) {
-        await supabase.rpc('adjust_balance', {
-          p_season_id: bet.season_id,
+        await supabase.rpc('adjust_league_balance', {
+          p_league_id: bet.league_id,
           p_user_id:   bet.user_id,
           p_amount:    bet.wager,
         });
@@ -134,7 +134,7 @@ async function runScoresCheck() {
 }
 
 function startScoresSettler() {
-  const schedule = `*/${INTERVAL} * * * *`;
+  const schedule = `0 * * * *`;
   cron.schedule(schedule, runScoresCheck);
   console.log(`[ScoresSettler] Scheduled every ${INTERVAL} minutes`);
 }

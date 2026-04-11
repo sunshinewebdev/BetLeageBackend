@@ -9,11 +9,32 @@ const router = express.Router();
 router.post('/', requireAuth, async (req, res, next) => {
   try {
     const schema = z.object({
-      name:      z.string().min(2).max(50),
-      is_public: z.boolean().optional().default(false),
+      name:           z.string().min(2).max(50),
+      is_public:      z.boolean().optional().default(false),
+      start_date:     z.string(),
+      end_date:       z.string(),
+      starting_chips: z.number().int().min(100).max(1000000).default(1000),
     });
+
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+    // Premium check
+    const { data: account } = await supabase
+      .from('account_balances')
+      .select('is_premium, premium_expires_at')
+      .eq('user_id', req.user.id)
+      .single();
+
+    const isPremium = account?.is_premium &&
+      (!account.premium_expires_at || new Date(account.premium_expires_at) > new Date());
+
+    if (!isPremium) {
+      return res.status(403).json({
+        error: 'Premium membership required to create leagues',
+        upgrade_required: true,
+      });
+    }
 
     const { data: league, error } = await supabase
       .from('leagues')
@@ -23,10 +44,11 @@ router.post('/', requireAuth, async (req, res, next) => {
 
     if (error) throw error;
 
-    // Auto-join the creator
+    // Auto-join creator and initialize their balance
     await supabase.from('league_members').insert({
       league_id: league.id,
       user_id:   req.user.id,
+      balance:   parsed.data.starting_chips,
     });
 
     res.status(201).json(league);
@@ -43,7 +65,7 @@ router.post('/join', requireAuth, async (req, res, next) => {
 
     const { data: league } = await supabase
       .from('leagues')
-      .select('id, name')
+      .select('id, name, starting_chips, start_date, end_date')
       .eq('invite_code', invite_code.toUpperCase())
       .single();
 
@@ -52,6 +74,7 @@ router.post('/join', requireAuth, async (req, res, next) => {
     const { error } = await supabase.from('league_members').insert({
       league_id: league.id,
       user_id:   req.user.id,
+      balance:   league.starting_chips,
     });
 
     if (error?.code === '23505') {
@@ -80,112 +103,20 @@ router.get('/', requireAuth, async (req, res, next) => {
   }
 });
 
-// GET /api/leagues/seasons/all — all active seasons across the user's leagues
-router.get('/seasons/all', requireAuth, async (req, res, next) => {
+// GET /api/leagues/:id/my-balance — get current user's league balance
+router.get('/:id/my-balance', requireAuth, async (req, res, next) => {
   try {
-    // Get leagues the user belongs to
-    const { data: memberships, error: memErr } = await supabase
+    const { data, error } = await supabase
       .from('league_members')
-      .select('league_id')
-      .eq('user_id', req.user.id);
-
-    if (memErr) throw memErr;
-
-    const leagueIds = (memberships || []).map(m => m.league_id);
-    if (!leagueIds.length) return res.json([]);
-
-    const { data, error } = await supabase
-      .from('league_seasons')
-      .select('*, leagues(name)')
-      .in('league_id', leagueIds)
-      .eq('status', 'active')
-      .order('start_date', { ascending: false });
-
-    if (error) throw error;
-    res.json(data);
-  } catch (err) {
-    next(err);
-  }
-});
-
-// GET /api/leagues/balance/:season_id — get current user's season balance
-router.get('/balance/:season_id', requireAuth, async (req, res, next) => {
-  try {
-    const { data, error } = await supabase
-      .from('season_balances')
       .select('balance')
-      .eq('season_id', req.params.season_id)
+      .eq('league_id', req.params.id)
       .eq('user_id', req.user.id)
       .single();
 
     if (error) throw error;
-    if (!data) return res.status(404).json({ error: 'Balance not found' });
+    if (!data) return res.status(404).json({ error: 'Not a member of this league' });
 
     res.json(data);
-  } catch (err) {
-    next(err);
-  }
-});
-
-// GET /api/leagues/:id/seasons
-router.get('/:id/seasons', requireAuth, async (req, res, next) => {
-  try {
-    const { data, error } = await supabase
-      .from('league_seasons')
-      .select('*')
-      .eq('league_id', req.params.id)
-      .order('start_date', { ascending: false });
-
-    if (error) throw error;
-    res.json(data);
-  } catch (err) {
-    next(err);
-  }
-});
-
-// POST /api/leagues/:id/seasons — create a season
-router.post('/:id/seasons', requireAuth, async (req, res, next) => {
-  try {
-    const schema = z.object({
-      name:             z.string().min(2).max(50),
-      mode:             z.enum(['weekly', 'season']),
-      start_date:       z.string(),
-      end_date:         z.string(),
-      starting_balance: z.number().int().min(100).max(100000).default(1000),
-    });
-    const parsed = schema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-
-    // Only league creator can make seasons
-    const { data: league } = await supabase
-      .from('leagues').select('created_by').eq('id', req.params.id).single();
-
-    if (league?.created_by !== req.user.id) {
-      return res.status(403).json({ error: 'Only the league creator can manage seasons' });
-    }
-
-    const { data: season, error } = await supabase
-      .from('league_seasons')
-      .insert({ ...parsed.data, league_id: req.params.id, status: 'active' })
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    // Initialize balances for all current members
-    const { data: members } = await supabase
-      .from('league_members')
-      .select('user_id')
-      .eq('league_id', req.params.id);
-
-    for (const m of (members || [])) {
-      await supabase.rpc('init_season_balance', {
-        p_season_id: season.id,
-        p_user_id:   m.user_id,
-      });
-    }
-
-    res.status(201).json(season);
   } catch (err) {
     next(err);
   }

@@ -8,7 +8,7 @@ const router = express.Router();
 
 const PlaceBetSchema = z.object({
   event_id:        z.string(),
-  season_id:       z.string().uuid().optional().nullable(),
+  league_id:       z.string().uuid().optional().nullable(),
   bet_type:        z.enum(['moneyline', 'spread', 'totals']),
   selection:       z.enum(['home', 'away', 'over', 'under']),
   selection_label: z.string(),
@@ -25,7 +25,7 @@ router.post('/', requireAuth, async (req, res, next) => {
     }
 
     const {
-      event_id, season_id, bet_type, selection,
+      event_id, league_id, bet_type, selection,
       selection_label, american_odds, wager
     } = parsed.data;
     const userId = req.user.id;
@@ -39,24 +39,14 @@ router.post('/', requireAuth, async (req, res, next) => {
     }
 
     const potential_payout = calculatePayout(wager, american_odds);
-    const isLeagueBet = !!season_id;
+    const isLeagueBet = !!league_id;
 
     if (isLeagueBet) {
-      // ── League bet: deduct from season_balances ──────────
-      const { data: season } = await supabase
-        .from('league_seasons')
-        .select('id, league_id, status')
-        .eq('id', season_id)
-        .single();
-
-      if (!season || season.status !== 'active') {
-        return res.status(400).json({ error: 'Season is not active' });
-      }
-
+      // ── League bet: deduct from league_members.balance ──
       const { data: member } = await supabase
         .from('league_members')
-        .select('id')
-        .eq('league_id', season.league_id)
+        .select('id, balance')
+        .eq('league_id', league_id)
         .eq('user_id', userId)
         .single();
 
@@ -64,21 +54,14 @@ router.post('/', requireAuth, async (req, res, next) => {
         return res.status(403).json({ error: 'You are not a member of this league' });
       }
 
-      const { data: balanceRow } = await supabase
-        .from('season_balances')
-        .select('balance')
-        .eq('season_id', season_id)
-        .eq('user_id', userId)
-        .single();
-
-      if (!balanceRow || balanceRow.balance < wager) {
+      if (member.balance < wager) {
         return res.status(400).json({ error: 'Insufficient league balance' });
       }
 
       const { error: balanceError } = await supabase
-        .from('season_balances')
-        .update({ balance: balanceRow.balance - wager, updated_at: new Date() })
-        .eq('season_id', season_id)
+        .from('league_members')
+        .update({ balance: member.balance - wager, updated_at: new Date() })
+        .eq('league_id', league_id)
         .eq('user_id', userId);
 
       if (balanceError) throw balanceError;
@@ -109,7 +92,7 @@ router.post('/', requireAuth, async (req, res, next) => {
       .insert({
         user_id: userId,
         event_id,
-        season_id: season_id || null,
+        league_id: league_id || null,
         bet_type,
         selection,
         selection_label,
@@ -122,13 +105,13 @@ router.post('/', requireAuth, async (req, res, next) => {
 
     if (betError) {
       // Rollback balance
-      if (season_id) {
-        const { data: balanceRow } = await supabase
-          .from('season_balances').select('balance')
-          .eq('season_id', season_id).eq('user_id', userId).single();
-        await supabase.from('season_balances')
-          .update({ balance: balanceRow.balance + wager })
-          .eq('season_id', season_id).eq('user_id', userId);
+      if (league_id) {
+        const { data: member } = await supabase
+          .from('league_members').select('balance')
+          .eq('league_id', league_id).eq('user_id', userId).single();
+        await supabase.from('league_members')
+          .update({ balance: member.balance + wager })
+          .eq('league_id', league_id).eq('user_id', userId);
       } else {
         await supabase.rpc('adjust_account_balance', {
           p_user_id: userId, p_amount: wager
@@ -146,7 +129,7 @@ router.post('/', requireAuth, async (req, res, next) => {
 // GET /api/bets
 router.get('/', requireAuth, async (req, res, next) => {
   try {
-    const { season_id, status } = req.query;
+    const { league_id, status } = req.query;
 
     let query = supabase
       .from('bets')
@@ -154,10 +137,10 @@ router.get('/', requireAuth, async (req, res, next) => {
       .eq('user_id', req.user.id)
       .order('placed_at', { ascending: false });
 
-    if (season_id === 'global') {
-      query = query.is('season_id', null);
-    } else if (season_id) {
-      query = query.eq('season_id', season_id);
+    if (league_id === 'global') {
+      query = query.is('league_id', null);
+    } else if (league_id) {
+      query = query.eq('league_id', league_id);
     }
 
     if (status) query = query.eq('status', status);
