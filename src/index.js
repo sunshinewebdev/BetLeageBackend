@@ -6,13 +6,16 @@ const rateLimit = require('express-rate-limit');
 
 const { startOddsFetcher } = require('./jobs/oddsFetcher');
 const { startScoresSettler } = require('./jobs/scoresSettler');
+const { startTournamentManager } = require('./jobs/tournamentManager');
 
 const eventsRouter = require('./routes/events');
 const betsRouter = require('./routes/bets');
+const parlaysRouter = require('./routes/parlays');
 const leaguesRouter = require('./routes/leagues');
 const leaderboardRouter = require('./routes/leaderboard');
 const stripeRouter  = require('./routes/stripe');
 const accountRouter = require('./routes/account');
+const tournamentsRouter = require('./routes/tournaments');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -32,10 +35,12 @@ app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 200 }));
 // ── Routes ──────────────────────────────────────────────────
 app.use('/api/events',      eventsRouter);
 app.use('/api/bets',        betsRouter);
+app.use('/api/parlays',     parlaysRouter);
 app.use('/api/leagues',     leaguesRouter);
 app.use('/api/leaderboard', leaderboardRouter);
 app.use('/api/stripe',      stripeRouter);
 app.use('/api/account',     accountRouter);
+app.use('/api/tournaments', tournamentsRouter);
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', ts: new Date() }));
 
@@ -52,4 +57,5 @@ app.listen(PORT, () => {
   console.log(`BetLeague API running on :${PORT}`);
   startOddsFetcher();
   startScoresSettler();
+  startTournamentManager();
 });

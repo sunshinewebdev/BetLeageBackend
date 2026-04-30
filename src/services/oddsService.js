@@ -92,9 +92,93 @@ function calculatePayout(wager, americanOdds) {
   }
 }
 
+// ── Prop markets by sport ─────────────────────────────────
+const PROP_MARKETS = {
+  americanfootball_nfl: [
+    'player_pass_yds',
+    'player_rush_yds',
+    'player_reception_yds',
+    'player_pass_tds',
+    'player_receptions',
+  ],
+  basketball_nba: [
+    'player_points',
+    'player_rebounds',
+    'player_assists',
+    'player_threes',
+    'player_blocks',
+    'player_steals',
+  ],
+  baseball_mlb: [
+    'batter_hits',
+    'batter_home_runs',
+    'batter_total_bases',
+    'pitcher_strikeouts',
+    'pitcher_outs',
+  ],
+};
+
+// ── Fetch player props for a specific event ───────────────
+async function fetchEventProps(eventId, sport) {
+  const markets = PROP_MARKETS[sport];
+  if (!markets || markets.length === 0) return null;
+
+  try {
+    const { data } = await axios.get(`${BASE_URL}/sports/${sport}/events/${eventId}/odds`, {
+      params: {
+        apiKey:     API_KEY,
+        regions:    'us',
+        markets:    markets.join(','),
+        oddsFormat: 'american',
+        bookmakers: BOOKMAKERS.join(','),
+      }
+    });
+
+    const book = data.bookmakers?.find(b => BOOKMAKERS.includes(b.key))
+               || data.bookmakers?.[0];
+
+    if (!book) return null;
+
+    const props = {};
+
+    for (const market of (book.markets || [])) {
+      if (!props[market.key]) props[market.key] = {};
+
+      for (const outcome of (market.outcomes || [])) {
+        const player = outcome.description;
+        if (!player) continue;
+
+        if (!props[market.key][player]) {
+          props[market.key][player] = {};
+        }
+
+        if (outcome.name === 'Over') {
+          props[market.key][player].over = outcome.price;
+          props[market.key][player].line = outcome.point;
+        } else if (outcome.name === 'Under') {
+          props[market.key][player].under = outcome.price;
+          if (!props[market.key][player].line) {
+            props[market.key][player].line = outcome.point;
+          }
+        }
+      }
+    }
+
+    return props;
+  } catch (err) {
+    if (err.response?.status === 422 || err.response?.status === 404) {
+      return null; // Props not available for this event — silent skip
+    }
+    console.error(`[Props] Failed to fetch props for event ${eventId}:`, err.message);
+    return null;
+  }
+}
+
 module.exports = {
   SPORTS,
+  PROP_MARKETS,
   fetchEventsWithOdds,
+  fetchEventProps,
   fetchScores,
   normalizeEvent,
   calculatePayout,

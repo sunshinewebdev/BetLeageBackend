@@ -9,11 +9,15 @@ const router = express.Router();
 const PlaceBetSchema = z.object({
   event_id:        z.string(),
   league_id:       z.string().uuid().optional().nullable(),
-  bet_type:        z.enum(['moneyline', 'spread', 'totals']),
+  tournament_id:   z.string().uuid().optional().nullable(),
+  bet_type:        z.enum(['moneyline', 'spread', 'totals', 'prop']),
   selection:       z.enum(['home', 'away', 'over', 'under']),
   selection_label: z.string(),
   american_odds:   z.number().int(),
   wager:           z.number().positive().max(10000),
+  prop_player:     z.string().optional().nullable(),
+  prop_market:     z.string().optional().nullable(),
+  prop_line:       z.number().optional().nullable(),
 });
 
 // POST /api/bets
@@ -25,8 +29,8 @@ router.post('/', requireAuth, async (req, res, next) => {
     }
 
     const {
-      event_id, league_id, bet_type, selection,
-      selection_label, american_odds, wager
+      event_id, league_id, tournament_id, bet_type, selection,
+      selection_label, american_odds, wager, prop_player, prop_market, prop_line
     } = parsed.data;
     const userId = req.user.id;
 
@@ -39,9 +43,31 @@ router.post('/', requireAuth, async (req, res, next) => {
     }
 
     const potential_payout = calculatePayout(wager, american_odds);
-    const isLeagueBet = !!league_id;
+    if (tournament_id) {
+      // ── Tournament bet: deduct from tournament_entries.balance ──
+      const { data: entry } = await supabase
+        .from('tournament_entries')
+        .select('id, balance')
+        .eq('tournament_id', tournament_id)
+        .eq('user_id', userId)
+        .single();
 
-    if (isLeagueBet) {
+      if (!entry) {
+        return res.status(400).json({ error: 'You have not entered this tournament' });
+      }
+
+      if (entry.balance < wager) {
+        return res.status(400).json({ error: 'Insufficient tournament balance' });
+      }
+
+      const { error: balanceError } = await supabase
+        .from('tournament_entries')
+        .update({ balance: entry.balance - wager })
+        .eq('id', entry.id);
+
+      if (balanceError) throw balanceError;
+
+    } else if (league_id) {
       // ── League bet: deduct from league_members.balance ──
       const { data: member } = await supabase
         .from('league_members')
@@ -93,19 +119,35 @@ router.post('/', requireAuth, async (req, res, next) => {
         user_id: userId,
         event_id,
         league_id: league_id || null,
+        tournament_id: tournament_id || null,
         bet_type,
         selection,
         selection_label,
         american_odds,
         wager,
         potential_payout,
+        prop_player: prop_player || null,
+        prop_market: prop_market || null,
+        prop_line: prop_line ?? null,
       })
       .select()
       .single();
 
     if (betError) {
       // Rollback balance
-      if (league_id) {
+      if (tournament_id) {
+        const { data: entry } = await supabase
+          .from('tournament_entries')
+          .select('id, balance')
+          .eq('tournament_id', tournament_id)
+          .eq('user_id', userId)
+          .single();
+
+        await supabase
+          .from('tournament_entries')
+          .update({ balance: entry.balance + wager })
+          .eq('id', entry.id);
+      } else if (league_id) {
         const { data: member } = await supabase
           .from('league_members').select('balance')
           .eq('league_id', league_id).eq('user_id', userId).single();
@@ -129,7 +171,7 @@ router.post('/', requireAuth, async (req, res, next) => {
 // GET /api/bets
 router.get('/', requireAuth, async (req, res, next) => {
   try {
-    const { league_id, status } = req.query;
+    const { league_id, tournament_id, source, status } = req.query;
 
     let query = supabase
       .from('bets')
@@ -137,10 +179,16 @@ router.get('/', requireAuth, async (req, res, next) => {
       .eq('user_id', req.user.id)
       .order('placed_at', { ascending: false });
 
-    if (league_id === 'global') {
+    if (source === 'account') {
+      query = query.is('league_id', null).is('tournament_id', null);
+    } else if (league_id === 'global') {
       query = query.is('league_id', null);
     } else if (league_id) {
       query = query.eq('league_id', league_id);
+    }
+
+    if (tournament_id) {
+      query = query.eq('tournament_id', tournament_id);
     }
 
     if (status) query = query.eq('status', status);
