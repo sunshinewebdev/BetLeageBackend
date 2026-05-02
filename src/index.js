@@ -16,7 +16,7 @@ const leaderboardRouter = require('./routes/leaderboard');
 const stripeRouter  = require('./routes/stripe');
 const accountRouter = require('./routes/account');
 const tournamentsRouter = require('./routes/tournaments');
-
+const profileRouter = require('./routes/profile');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
@@ -41,6 +41,7 @@ app.use('/api/leaderboard', leaderboardRouter);
 app.use('/api/stripe',      stripeRouter);
 app.use('/api/account',     accountRouter);
 app.use('/api/tournaments', tournamentsRouter);
+app.use('/api/profile', profileRouter);
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', ts: new Date() }));
 

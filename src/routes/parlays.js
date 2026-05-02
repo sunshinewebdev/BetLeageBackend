@@ -32,20 +32,17 @@ router.post('/', requireAuth, async (req, res, next) => {
     const { league_id, tournament_id, wager, legs } = parsed.data;
     const userId = req.user.id;
 
-    // Reject duplicate events in the same parlay
     const eventIds = legs.map(l => l.event_id);
-    if (new Set(eventIds).size !== eventIds.length) {
-      return res.status(400).json({ error: 'Each leg must be for a different event' });
-    }
+    const uniqueEventIds = [...new Set(eventIds)];
 
     // Verify all events are still upcoming
     const { data: events, error: eventsError } = await supabase
       .from('events')
       .select('id, status')
-      .in('id', eventIds);
+      .in('id', uniqueEventIds);
 
     if (eventsError) throw eventsError;
-    if (!events || events.length !== eventIds.length) {
+    if (!events || events.length !== uniqueEventIds.length) {
       return res.status(400).json({ error: 'One or more events could not be found' });
     }
     if (events.some(e => e.status !== 'upcoming')) {

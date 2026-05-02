@@ -170,4 +170,29 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
   }
 });
 
+// POST /api/stripe/portal — create a Billing Portal session for the current user
+router.post('/portal', requireAuth, async (req, res, next) => {
+  try {
+    const { data: subscription } = await supabase
+      .from('subscriptions')
+      .select('stripe_customer_id')
+      .eq('user_id', req.user.id)
+      .eq('status', 'active')
+      .single();
+
+    if (!subscription) {
+      return res.status(404).json({ error: 'No active subscription found' });
+    }
+
+    const session = await stripe.billingPortal.sessions.create({
+      customer:   subscription.stripe_customer_id,
+      return_url: `${CLIENT_URL}/shop`,
+    });
+
+    res.json({ url: session.url });
+  } catch (err) {
+    next(err);
+  }
+});
+
 module.exports = router;

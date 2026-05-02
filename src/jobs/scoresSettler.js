@@ -280,7 +280,7 @@ async function runScoresCheck() {
 }
 
 function startScoresSettler() {
-  const schedule = `* ${INTERVAL} * * *`;
+  const schedule = `0 ${INTERVAL} * * *`;
   cron.schedule(schedule, runScoresCheck);
   console.log(`[ScoresSettler] Scheduled every ${INTERVAL} minutes`);
 }

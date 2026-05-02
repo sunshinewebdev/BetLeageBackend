@@ -66,19 +66,32 @@ router.post('/claim-daily', requireAuth, async (req, res, next) => {
 // GET /api/account/me
 router.get('/me', requireAuth, async (req, res, next) => {
   try {
-    const { data, error } = await supabase
-      .from('account_balances')
-      .select('balance, login_streak, last_claim_date, is_premium, premium_expires_at')
-      .eq('user_id', req.user.id)
-      .single();
+    const [accountRes, profileRes] = await Promise.all([
+      supabase
+        .from('account_balances')
+        .select('balance, login_streak, last_claim_date, is_premium, premium_expires_at')
+        .eq('user_id', req.user.id)
+        .single(),
+      supabase
+        .from('profiles')
+        .select('username')
+        .eq('id', req.user.id)
+        .maybeSingle(),
+    ]);
 
-    if (error) throw error;
+    if (accountRes.error) throw accountRes.error;
 
+    const data = accountRes.data;
     const today      = new Date().toISOString().split('T')[0];
     const canClaim   = data.last_claim_date !== today;
     const nextReward = getReward((data.login_streak || 0) + 1);
 
-    res.json({ ...data, can_claim: canClaim, next_reward: nextReward });
+    res.json({
+      ...data,
+      username:    profileRes.data?.username ?? null,
+      can_claim:   canClaim,
+      next_reward: nextReward,
+    });
   } catch (err) {
     next(err);
   }

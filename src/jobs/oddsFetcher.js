@@ -60,7 +60,7 @@ function startOddsFetcher() {
   runOddsFetch();
 
   // Then on schedule
-  const schedule = `* ${INTERVAL} * * *`;
+  const schedule = `0 ${INTERVAL} * * *`;
   cron.schedule(schedule, runOddsFetch);
   console.log(`[OddsFetcher] Scheduled every ${INTERVAL} minutes`);
 }
