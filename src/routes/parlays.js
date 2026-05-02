@@ -12,7 +12,13 @@ const LegSchema = z.object({
   selection:       z.enum(['home', 'away', 'over', 'under']),
   selection_label: z.string(),
   american_odds:   z.number().int(),
-});
+  prop_player:     z.string().optional().nullable(),
+  prop_market:     z.string().optional().nullable(),
+  prop_line:       z.number().optional().nullable(),
+}).refine(
+  l => l.bet_type !== 'prop' || (l.prop_player && l.prop_market && l.prop_line != null),
+  { message: 'Prop legs require prop_player, prop_market, and prop_line' },
+);
 
 const PlaceParlaySchema = z.object({
   league_id:     z.string().uuid().optional().nullable(),
@@ -135,6 +141,9 @@ router.post('/', requireAuth, async (req, res, next) => {
       selection:       l.selection,
       selection_label: l.selection_label,
       american_odds:   l.american_odds,
+      prop_player:     l.prop_player ?? null,
+      prop_market:     l.prop_market ?? null,
+      prop_line:       l.prop_line   ?? null,
     }));
 
     const { error: legsError } = await supabase.from('parlay_legs').insert(legRows);

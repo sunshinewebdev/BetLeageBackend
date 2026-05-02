@@ -12,6 +12,7 @@ async function settlePropBet(bet, event) {
     if (!gameId) return null;
 
     const stats = await fetchGameStats(event.sport, gameId);
+
     if (!stats || stats.length === 0) return null;
 
     // Find player stats - match by last name
@@ -280,6 +281,7 @@ async function runScoresCheck() {
 }
 
 function startScoresSettler() {
+  runScoresCheck();
   const schedule = `0 ${INTERVAL} * * *`;
   cron.schedule(schedule, runScoresCheck);
   console.log(`[ScoresSettler] Scheduled every ${INTERVAL} minutes`);
