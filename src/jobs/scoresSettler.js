@@ -7,6 +7,7 @@ const INTERVAL = parseInt(process.env.SCORES_FETCH_INTERVAL || '4');
 
 async function settlePropBet(bet, event) {
   try {
+    console.log('bet', bet)
     const gameDate = new Date(event.commence_time);
     const gameId = await findGameId(event.sport, event.home_team, event.away_team, gameDate);
     if (!gameId) return null;
@@ -14,7 +15,7 @@ async function settlePropBet(bet, event) {
     const stats = await fetchGameStats(event.sport, gameId);
 
     if (!stats || stats.length === 0) return null;
-
+    console.log('stats',stats)
     // Find player stats - match by last name
     const playerLast = bet.prop_player?.split(' ').pop()?.toLowerCase();
     if (!playerLast) return null;
@@ -24,12 +25,15 @@ async function settlePropBet(bet, event) {
       return name.toLowerCase() === playerLast;
     });
 
+    console.log('player stats', playerStats);
+
     if (!playerStats) return 'void';
 
     const actual = getStatValue(playerStats, bet.prop_market, event.sport);
     if (actual === null) return null;
 
     const line = bet.prop_line;
+    console.log('line',line)
     if (actual === line) return 'pushed';
     if (bet.selection === 'over') return actual > line ? 'won' : 'lost';
     if (bet.selection === 'under') return actual < line ? 'won' : 'lost';

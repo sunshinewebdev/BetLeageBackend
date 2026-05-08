@@ -61,10 +61,18 @@ async function findGameId(sport, homeTeam, awayTeam, date) {
   const baseUrl = BASE_URLS[sport];
   if (!baseUrl) return null;
 
-  const dateStr = date.toISOString().split('T')[0];
+  // commence_time is UTC; balldontlie indexes games by US local date,
+  // so a night game in the US can sit on the prior calendar day there.
+  const utcDay = new Date(date);
+  const prevDay = new Date(utcDay);
+  prevDay.setUTCDate(prevDay.getUTCDate() - 1);
+  const dates = [
+    prevDay.toISOString().split('T')[0],
+    utcDay.toISOString().split('T')[0],
+  ];
 
   const { data } = await axios.get(`${baseUrl}/games`, {
-    params: { dates: [dateStr] },
+    params: { dates },
     headers,
   });
 

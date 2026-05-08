@@ -175,7 +175,7 @@ router.get('/', requireAuth, async (req, res, next) => {
 
     let query = supabase
       .from('bets')
-      .select('*, events(home_team, away_team, commence_time, sport)')
+      .select('*, event:events(home_team, away_team, commence_time, sport)')
       .eq('user_id', req.user.id)
       .order('placed_at', { ascending: false });
 
