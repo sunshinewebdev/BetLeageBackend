@@ -1,11 +1,10 @@
 const express = require('express');
-const { requireAuth } = require('../middleware/auth');
 const supabase = require('../lib/supabase');
 
 const router = express.Router();
 
-// GET /api/events — list upcoming events, optionally filtered by sport
-router.get('/', requireAuth, async (req, res, next) => {
+// GET /api/events — list upcoming events, optionally filtered by sport (public)
+router.get('/', async (req, res, next) => {
   try {
     const { sport, status = 'upcoming' } = req.query;
 
@@ -27,8 +26,8 @@ router.get('/', requireAuth, async (req, res, next) => {
   }
 });
 
-// GET /api/events/:id
-router.get('/:id', requireAuth, async (req, res, next) => {
+// GET /api/events/:id (public)
+router.get('/:id', async (req, res, next) => {
   try {
     const { data, error } = await supabase
       .from('events')

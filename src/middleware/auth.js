@@ -17,4 +17,17 @@ async function requireAuth(req, res, next) {
   next();
 }
 
-module.exports = { requireAuth };
+async function optionalAuth(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) {
+    req.user = null;
+    return next();
+  }
+
+  const token = authHeader.split(' ')[1];
+  const { data: { user } } = await supabase.auth.getUser(token);
+  req.user = user ?? null;
+  next();
+}
+
+module.exports = { requireAuth, optionalAuth };

@@ -1,12 +1,12 @@
 const express = require('express');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, optionalAuth } = require('../middleware/auth');
 const { enterTournament, getPayoutSpots, getPayoutPercentages } = require('../services/tournamentService');
 const supabase = require('../lib/supabase');
 
 const router = express.Router();
 
-// GET /api/tournaments — list active tournaments with caller's entered status
-router.get('/', requireAuth, async (req, res, next) => {
+// GET /api/tournaments — list active tournaments with caller's entered status (public)
+router.get('/', optionalAuth, async (req, res, next) => {
   try {
     const { type } = req.query;
     const today = new Date().toISOString().split('T')[0];
@@ -23,12 +23,16 @@ router.get('/', requireAuth, async (req, res, next) => {
     const { data, error } = await query;
     if (error) throw error;
 
-    const { data: entries } = await supabase
-      .from('tournament_entries')
-      .select('tournament_id')
-      .eq('user_id', req.user.id);
+    const userId = req.user?.id;
+    let enteredIds = new Set();
 
-    const enteredIds = new Set((entries || []).map(e => e.tournament_id));
+    if (userId) {
+      const { data: entries } = await supabase
+        .from('tournament_entries')
+        .select('tournament_id')
+        .eq('user_id', userId);
+      enteredIds = new Set((entries || []).map(e => e.tournament_id));
+    }
 
     const enriched = (data || []).map(t => ({
       ...t,
