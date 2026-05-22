@@ -32,12 +32,12 @@ async function activateStartedTournaments() {
     .gt('end_date', now);
 }
 
-// ── Ensure upcoming tournaments exist ───────────────────────
-async function ensureUpcomingTournaments() {
+// ── Ensure a tournament exists for the current period ───────
+async function ensureCurrentTournaments() {
   const now = new Date();
 
   for (const type of ['weekly', 'monthly', 'yearly']) {
-    const { start_date, end_date } = getNextTournamentWindow(type, now);
+    const { start_date, end_date } = getCurrentTournamentWindow(type, now);
 
     for (const buy_in of BUY_INS) {
       // Check if an active or upcoming tournament of this type + buy-in already exists
@@ -61,16 +61,16 @@ async function ensureUpcomingTournaments() {
   }
 }
 
-function getNextTournamentWindow(type, now) {
+function getCurrentTournamentWindow(type, now) {
   const year = now.getFullYear();
   const month = now.getMonth();
 
   if (type === 'weekly') {
-    // Start next Monday, end following Sunday
-    const day = now.getDay();
-    const daysUntilMonday = day === 0 ? 1 : 8 - day;
+    // Current week: Monday 00:00 → Sunday 23:59
+    const day = now.getDay(); // 0 = Sun … 6 = Sat
+    const daysSinceMonday = day === 0 ? 6 : day - 1;
     const start = new Date(now);
-    start.setDate(now.getDate() + daysUntilMonday);
+    start.setDate(now.getDate() - daysSinceMonday);
     start.setHours(0, 0, 0, 0);
     const end = new Date(start);
     end.setDate(start.getDate() + 6);
@@ -83,22 +83,19 @@ function getNextTournamentWindow(type, now) {
   }
 
   if (type === 'monthly') {
-    // Next month, 1st to last day
-    const startMonth = month + 1 > 11 ? 0 : month + 1;
-    const startYear = month + 1 > 11 ? year + 1 : year;
-    const start = new Date(startYear, startMonth, 1);
-    const end = new Date(startYear, startMonth + 1, 0, 23, 59, 59, 999);
+    // Current month: 1st to last day
+    const start = new Date(year, month, 1);
+    const end = new Date(year, month + 1, 0, 23, 59, 59, 999);
     return {
       start_date: start.toISOString(),
       end_date: end.toISOString(),
     };
   }
 
-  // yearly — next year Jan 1 to Dec 31
-  const startYear = year + 1;
+  // yearly — current year Jan 1 to Dec 31
   return {
-    start_date: new Date(startYear, 0, 1).toISOString(),
-    end_date: new Date(startYear, 11, 31, 23, 59, 59, 999).toISOString(),
+    start_date: new Date(year, 0, 1).toISOString(),
+    end_date: new Date(year, 11, 31, 23, 59, 59, 999).toISOString(),
   };
 }
 
@@ -107,7 +104,7 @@ async function runTournamentManager() {
   console.log(`[TournamentManager] Running at ${new Date().toISOString()}`);
   await settleEndedTournaments();
   await activateStartedTournaments();
-  await ensureUpcomingTournaments();
+  await ensureCurrentTournaments();
 }
 
 function startTournamentManager() {

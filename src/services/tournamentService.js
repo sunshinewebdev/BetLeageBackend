@@ -77,6 +77,9 @@ function getPayoutPercentages(spots) {
 async function createTournament({ type, buy_in, start_date, end_date }) {
   if (!BUY_INS.includes(buy_in)) throw new Error(`Invalid buy-in: ${buy_in}`);
 
+  // Activate immediately if the window has already started; otherwise it's upcoming.
+  const status = new Date(start_date) <= new Date() ? 'active' : 'upcoming';
+
   const { data, error } = await supabase
     .from('tournaments')
     .insert({
@@ -87,7 +90,7 @@ async function createTournament({ type, buy_in, start_date, end_date }) {
       rake_percent: RAKE_PERCENT,
       prize_pool: 0,
       player_count: 0,
-      status: 'upcoming',
+      status,
       start_date,
       end_date,
     })
