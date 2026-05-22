@@ -66,7 +66,7 @@ router.post('/claim-daily', requireAuth, async (req, res, next) => {
 // GET /api/account/me
 router.get('/me', requireAuth, async (req, res, next) => {
   try {
-    const [accountRes, profileRes] = await Promise.all([
+    const [accountRes, profileRes, subRes] = await Promise.all([
       supabase
         .from('account_balances')
         .select('balance, login_streak, last_claim_date, is_premium, premium_expires_at')
@@ -74,23 +74,36 @@ router.get('/me', requireAuth, async (req, res, next) => {
         .single(),
       supabase
         .from('profiles')
-        .select('username')
+        .select('username, avatar_url')
         .eq('id', req.user.id)
+        .maybeSingle(),
+      supabase
+        .from('subscriptions')
+        .select('plan, status, current_period_end')
+        .eq('user_id', req.user.id)
+        .order('created_at', { ascending: false })
+        .limit(1)
         .maybeSingle(),
     ]);
 
     if (accountRes.error) throw accountRes.error;
 
-    const data = accountRes.data;
+    const data         = accountRes.data;
+    const profile      = profileRes.data;
+    const subscription = subRes.data;
     const today      = new Date().toISOString().split('T')[0];
     const canClaim   = data.last_claim_date !== today;
     const nextReward = getReward((data.login_streak || 0) + 1);
 
     res.json({
       ...data,
-      username:    profileRes.data?.username ?? null,
-      can_claim:   canClaim,
-      next_reward: nextReward,
+      username:             profile?.username ?? null,
+      avatar_url:           profile?.avatar_url ?? null,
+      can_claim:            canClaim,
+      next_reward:          nextReward,
+      subscription_plan:    subscription?.plan ?? null,
+      subscription_status:  subscription?.status ?? null,
+      subscription_expires: subscription?.current_period_end ?? null,
     });
   } catch (err) {
     next(err);

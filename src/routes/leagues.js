@@ -8,6 +8,7 @@ const router = express.Router();
 // POST /api/leagues — create a league
 router.post('/', requireAuth, async (req, res, next) => {
   try {
+    console.log(req);
     const schema = z.object({
       name:           z.string().min(2).max(50),
       is_public:      z.boolean().optional().default(false),
@@ -35,6 +36,7 @@ router.post('/', requireAuth, async (req, res, next) => {
         upgrade_required: true,
       });
     }
+    console.log(parsed.data);
 
     const { data: league, error } = await supabase
       .from('leagues')
@@ -44,12 +46,22 @@ router.post('/', requireAuth, async (req, res, next) => {
 
     if (error) throw error;
 
-    // Auto-join creator and initialize their balance
-    await supabase.from('league_members').insert({
+    // Auto-join creator and initialize their balance.
+    // The league list query inner-joins league_members, so a league with no
+    // membership row is invisible. If this insert fails, roll back the league
+    // and surface the error rather than leaving an orphaned, hidden league.
+    const { error: memberError } = await supabase.from('league_members').insert({
       league_id: league.id,
       user_id:   req.user.id,
       balance:   parsed.data.starting_chips,
     });
+
+    if (memberError) {
+      await supabase.from('leagues').delete().eq('id', league.id);
+      throw memberError;
+    }
+
+    console.log(league)
 
     res.status(201).json(league);
   } catch (err) {

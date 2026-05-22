@@ -137,8 +137,22 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
 
     if (event.type === 'customer.subscription.deleted' ||
         event.type === 'customer.subscription.updated') {
-      const sub    = event.data.object;
-      const status = sub.status; // 'active' | 'canceled' | 'past_due'
+      const sub = event.data.object;
+
+      // Fetch the full subscription from Stripe for accurate period data.
+      // The webhook payload can lag or omit current_period_end; fall back to
+      // the payload only if the API call fails.
+      let fullSub = sub;
+      try {
+        fullSub = await stripe.subscriptions.retrieve(sub.id);
+      } catch (err) {
+        console.error('[Stripe] Failed to retrieve subscription:', err.message);
+      }
+
+      const status    = fullSub.status; // 'active' | 'canceled' | 'past_due'
+      const periodEnd = fullSub.current_period_end
+        ? new Date(fullSub.current_period_end * 1000).toISOString()
+        : null;
 
       const { data: record } = await supabase
         .from('subscriptions')
@@ -149,16 +163,22 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
       if (record) {
         await supabase.from('subscriptions').update({
           status,
-          current_period_end: new Date(sub.current_period_end * 1000).toISOString(),
+          current_period_end: periodEnd,
           updated_at: new Date().toISOString(),
         }).eq('stripe_subscription_id', sub.id);
 
-        // Revoke premium if canceled or past due
-        if (status !== 'active') {
+        if (status === 'active') {
+          await supabase.from('account_balances').update({
+            is_premium:         true,
+            premium_expires_at: periodEnd,
+          }).eq('user_id', record.user_id);
+          console.log(`[Stripe] Premium renewed for user ${record.user_id} until ${periodEnd}`);
+        } else {
           await supabase.from('account_balances').update({
             is_premium:         false,
             premium_expires_at: null,
           }).eq('user_id', record.user_id);
+          console.log(`[Stripe] Premium revoked for user ${record.user_id} — status: ${status}`);
         }
       }
     }
@@ -173,6 +193,8 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
 // POST /api/stripe/portal — create a Billing Portal session for the current user
 router.post('/portal', requireAuth, async (req, res, next) => {
   try {
+    console.log(req.user.id)
+    console.log('making portal')
     const { data: subscription } = await supabase
       .from('subscriptions')
       .select('stripe_customer_id')
@@ -181,6 +203,7 @@ router.post('/portal', requireAuth, async (req, res, next) => {
       .single();
 
     if (!subscription) {
+      console.log(subscription)
       return res.status(404).json({ error: 'No active subscription found' });
     }
 
