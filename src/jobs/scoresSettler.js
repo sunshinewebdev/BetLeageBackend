@@ -1,13 +1,53 @@
 const cron = require('node-cron');
-const { SPORTS, fetchScores, calculatePayout } = require('../services/oddsService');
+const { SPORTS, fetchScores } = require('../services/oddsService');
 const { fetchGameStats, getStatValue, findGameId } = require('../services/balldontlieService');
 const supabase = require('../lib/supabase');
 
 const INTERVAL = parseInt(process.env.SCORES_FETCH_INTERVAL || '4');
 
+const AMBIGUOUS = Symbol('ambiguous-player');
+
+function normalizeName(name) {
+  return String(name)
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '') // strip accents
+    .replace(/[^a-z\s]/g, '')        // strip punctuation (D'Angelo, Jr.)
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/ (jr|sr|ii|iii|iv|v)$/, ''); // strip generational suffixes
+}
+
+// Match the bet's player against the stats feed. Prefer an exact full-name
+// match; fall back to last name only when exactly one player carries it
+// (two Joneses in one game must not grade each other's bets). Returns the
+// stats row, null when the player is absent, or AMBIGUOUS.
+function findPlayerStats(stats, propPlayer) {
+  const target = normalizeName(propPlayer || '');
+  if (!target) return null;
+
+  const fullMatches = stats.filter(s => {
+    const p = s.player || {};
+    const full = p.first_name && p.last_name
+      ? `${p.first_name} ${p.last_name}`
+      : (p.name || '');
+    return normalizeName(full) === target;
+  });
+  if (fullMatches.length === 1) return fullMatches[0];
+  if (fullMatches.length > 1) return AMBIGUOUS;
+
+  const targetLast = target.split(' ').pop();
+  const lastMatches = stats.filter(s => {
+    const last = s.player?.last_name || String(s.player?.name || '').split(' ').pop();
+    return normalizeName(last) === targetLast;
+  });
+  if (lastMatches.length === 1) return lastMatches[0];
+  if (lastMatches.length > 1) return AMBIGUOUS;
+  return null;
+}
+
 async function settlePropBet(bet, event) {
   try {
-    console.log('bet', bet)
     const gameDate = new Date(event.commence_time);
     const gameId = await findGameId(event.sport, event.home_team, event.away_team, gameDate);
     if (!gameId) return null;
@@ -15,25 +55,22 @@ async function settlePropBet(bet, event) {
     const stats = await fetchGameStats(event.sport, gameId);
 
     if (!stats || stats.length === 0) return null;
-    console.log('stats',stats)
-    // Find player stats - match by last name
-    const playerLast = bet.prop_player?.split(' ').pop()?.toLowerCase();
-    if (!playerLast) return null;
-
-    const playerStats = stats.find(s => {
-      const name = s.player?.last_name || s.player?.name || '';
-      return name.toLowerCase() === playerLast;
-    });
-
-    console.log('player stats', playerStats);
-
+    
+    const playerStats = findPlayerStats(stats, bet.prop_player);
+    if (playerStats === AMBIGUOUS) {
+      // Two players share the name we'd match on — never grade a guess.
+      console.warn(`[ScoresSettler] Ambiguous player match for "${bet.prop_player}" — leaving bet ${bet.id} pending`);
+      return null;
+    }
     if (!playerStats) return 'void';
 
     const actual = getStatValue(playerStats, bet.prop_market, event.sport);
     if (actual === null) return null;
 
-    const line = bet.prop_line;
-    console.log('line',line)
+    // numeric columns come back from Postgres as strings — coerce before
+    // comparing, or the push check can never match
+    const line = Number(bet.prop_line);
+    if (Number.isNaN(line)) return null;
     if (actual === line) return 'pushed';
     if (bet.selection === 'over') return actual > line ? 'won' : 'lost';
     if (bet.selection === 'under') return actual < line ? 'won' : 'lost';
@@ -46,18 +83,11 @@ async function settlePropBet(bet, event) {
 
 async function creditBankroll({ user_id, league_id, tournament_id }, amount) {
   if (tournament_id) {
-    const { data: entry } = await supabase
-      .from('tournament_entries')
-      .select('id, balance')
-      .eq('tournament_id', tournament_id)
-      .eq('user_id', user_id)
-      .single();
-    if (entry) {
-      await supabase
-        .from('tournament_entries')
-        .update({ balance: Number(entry.balance) + amount })
-        .eq('id', entry.id);
-    }
+    await supabase.rpc('adjust_tournament_balance', {
+      p_tournament_id: tournament_id,
+      p_user_id:       user_id,
+      p_amount:        amount,
+    });
   } else if (league_id) {
     await supabase.rpc('adjust_league_balance', {
       p_league_id: league_id,
@@ -173,32 +203,7 @@ async function settleBetsForEvent(event) {
                  : null;
 
     if (amount) {
-      if (bet.tournament_id) {
-        const { data: entry } = await supabase
-          .from('tournament_entries')
-          .select('id, balance')
-          .eq('tournament_id', bet.tournament_id)
-          .eq('user_id', bet.user_id)
-          .single();
-
-        if (entry) {
-          await supabase
-            .from('tournament_entries')
-            .update({ balance: Number(entry.balance) + amount })
-            .eq('id', entry.id);
-        }
-      } else if (bet.league_id) {
-        await supabase.rpc('adjust_league_balance', {
-          p_league_id: bet.league_id,
-          p_user_id:   bet.user_id,
-          p_amount:    amount,
-        });
-      } else {
-        await supabase.rpc('adjust_account_balance', {
-          p_user_id: bet.user_id,
-          p_amount:  amount,
-        });
-      }
+      await creditBankroll(bet, Number(amount));
     }
   }
 }
@@ -217,9 +222,13 @@ function resolveBet(bet, event) {
     if (bet.selection === 'away') return awayWon ? 'won' : (home_score === away_score ? 'pushed' : 'lost');
   }
 
+  // Grade against the line frozen on the wager at placement. Fall back to
+  // the event's odds snapshot only for wagers placed before `line` existed.
   if (bet.bet_type === 'spread') {
-    const spreadPoint = odds?.spread?.[bet.selection]?.point;
-    if (spreadPoint == null) return null;
+    const rawPoint = bet.line ?? odds?.spread?.[bet.selection]?.point;
+    if (rawPoint == null) return null;
+    const spreadPoint = Number(rawPoint);
+    if (Number.isNaN(spreadPoint)) return null;
 
     const adjustedDiff = bet.selection === 'home'
       ? homeDiff + spreadPoint
@@ -231,8 +240,10 @@ function resolveBet(bet, event) {
   }
 
   if (bet.bet_type === 'totals') {
-    const totalPoint = odds?.totals?.point;
-    if (totalPoint == null) return null;
+    const rawPoint = bet.line ?? odds?.totals?.point;
+    if (rawPoint == null) return null;
+    const totalPoint = Number(rawPoint);
+    if (Number.isNaN(totalPoint)) return null;
 
     const total = home_score + away_score;
     if (total === totalPoint) return 'pushed';
@@ -253,17 +264,20 @@ async function runScoresCheck() {
       for (const game of scores) {
         if (!game.completed) continue;
 
-        const homeScore = game.scores?.find(s => s.name === game.home_team)?.score;
-        const awayScore = game.scores?.find(s => s.name === game.away_team)?.score;
+        const homeScore = parseInt(game.scores?.find(s => s.name === game.home_team)?.score, 10);
+        const awayScore = parseInt(game.scores?.find(s => s.name === game.away_team)?.score, 10);
+
+        // Never settle from a malformed/missing score payload
+        if (Number.isNaN(homeScore) || Number.isNaN(awayScore)) continue;
 
         // Update event to completed with final score
         const { data: event, error } = await supabase
           .from('events')
           .update({
             status:      'completed',
-            home_score:  parseInt(homeScore),
-            away_score:  parseInt(awayScore),
-            winner:      parseInt(homeScore) > parseInt(awayScore) ? 'home' : 'away',
+            home_score:  homeScore,
+            away_score:  awayScore,
+            winner:      homeScore > awayScore ? 'home' : 'away',
           })
           .eq('id', game.id)
           .select()
@@ -286,7 +300,8 @@ async function runScoresCheck() {
 
 function startScoresSettler() {
   runScoresCheck();
-  const schedule = `0 ${INTERVAL} * * *`;
+  // every INTERVAL minutes (the previous `0 N * * *` ran once daily at N:00)
+  const schedule = `*/${INTERVAL} * * * *`;
   cron.schedule(schedule, runScoresCheck);
   console.log(`[ScoresSettler] Scheduled every ${INTERVAL} minutes`);
 }

@@ -8,7 +8,6 @@ const router = express.Router();
 // POST /api/leagues — create a league
 router.post('/', requireAuth, async (req, res, next) => {
   try {
-    console.log(req);
     const schema = z.object({
       name:           z.string().min(2).max(50),
       is_public:      z.boolean().optional().default(false),
@@ -36,7 +35,6 @@ router.post('/', requireAuth, async (req, res, next) => {
         upgrade_required: true,
       });
     }
-    console.log(parsed.data);
 
     const { data: league, error } = await supabase
       .from('leagues')
@@ -61,8 +59,6 @@ router.post('/', requireAuth, async (req, res, next) => {
       throw memberError;
     }
 
-    console.log(league)
-
     res.status(201).json(league);
   } catch (err) {
     next(err);
@@ -73,7 +69,9 @@ router.post('/', requireAuth, async (req, res, next) => {
 router.post('/join', requireAuth, async (req, res, next) => {
   try {
     const { invite_code } = req.body;
-    if (!invite_code) return res.status(400).json({ error: 'invite_code required' });
+    if (!invite_code || typeof invite_code !== 'string' || invite_code.length > 32) {
+      return res.status(400).json({ error: 'invite_code required' });
+    }
 
     const { data: league } = await supabase
       .from('leagues')

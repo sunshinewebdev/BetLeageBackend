@@ -29,7 +29,9 @@ router.get('/plans', (req, res) => {
 router.post('/checkout/credits', requireAuth, async (req, res, next) => {
   try {
     const { packId } = req.body;
-    if (!packId) return res.status(400).json({ error: 'packId required' });
+    if (!packId || !CREDIT_PACKS[packId]) {
+      return res.status(400).json({ error: 'Invalid packId' });
+    }
 
     const session = await createCreditCheckout({
       packId,
@@ -39,8 +41,9 @@ router.post('/checkout/credits', requireAuth, async (req, res, next) => {
       cancelUrl:  `${CLIENT_URL}/shop`,
     });
 
-    // Log pending purchase
-    await supabase.from('credit_purchases').insert({
+    // Log pending purchase. The webhook only credits sessions with a pending
+    // row, so this must succeed before we hand the user a checkout URL.
+    const { error: purchaseError } = await supabase.from('credit_purchases').insert({
       user_id:           req.user.id,
       stripe_session_id: session.id,
       pack_id:           packId,
@@ -48,6 +51,8 @@ router.post('/checkout/credits', requireAuth, async (req, res, next) => {
       amount_cents:      CREDIT_PACKS[packId].amount_cents,
       status:            'pending',
     });
+
+    if (purchaseError) throw purchaseError;
 
     res.json({ url: session.url });
   } catch (err) {
@@ -59,7 +64,9 @@ router.post('/checkout/credits', requireAuth, async (req, res, next) => {
 router.post('/checkout/subscribe', requireAuth, async (req, res, next) => {
   try {
     const { plan } = req.body;
-    if (!plan) return res.status(400).json({ error: 'plan required' });
+    if (!plan || !SUBSCRIPTION_PLANS[plan]) {
+      return res.status(400).json({ error: 'Invalid plan' });
+    }
 
     const session = await createSubscriptionCheckout({
       plan,
@@ -91,21 +98,40 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
   try {
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object;
-      const { type, userId, packId, credits, plan } = session.metadata;
+      const { type, userId, credits, plan } = session.metadata;
 
       if (type === 'credits') {
-        // Credit the user's account balance
-        await supabase.rpc('adjust_account_balance', {
-          p_user_id: userId,
-          p_amount:  parseInt(credits),
-        });
-
-        // Mark purchase complete
-        await supabase.from('credit_purchases')
+        // Idempotency: Stripe retries and can replay events. Atomically flip
+        // the pending purchase to completed first — if no row was updated,
+        // this session was already processed (or unknown) and we must not
+        // credit again.
+        const { data: claimed, error: claimError } = await supabase
+          .from('credit_purchases')
           .update({ status: 'completed' })
-          .eq('stripe_session_id', session.id);
+          .eq('stripe_session_id', session.id)
+          .neq('status', 'completed')
+          .select('id');
 
-        console.log(`[Stripe] Credited ${credits} to user ${userId}`);
+        if (claimError) throw claimError;
+
+        if (!claimed?.length) {
+          console.log(`[Stripe] Session ${session.id} already processed — skipping credit`);
+        } else {
+          const { error: creditError } = await supabase.rpc('adjust_account_balance', {
+            p_user_id: userId,
+            p_amount:  parseInt(credits, 10),
+          });
+
+          if (creditError) {
+            // Re-open the purchase so a Stripe retry can credit it
+            await supabase.from('credit_purchases')
+              .update({ status: 'pending' })
+              .eq('stripe_session_id', session.id);
+            throw creditError;
+          }
+
+          console.log(`[Stripe] Credited ${credits} to user ${userId}`);
+        }
       }
 
       if (type === 'subscription') {
@@ -193,8 +219,6 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
 // POST /api/stripe/portal — create a Billing Portal session for the current user
 router.post('/portal', requireAuth, async (req, res, next) => {
   try {
-    console.log(req.user.id)
-    console.log('making portal')
     const { data: subscription } = await supabase
       .from('subscriptions')
       .select('stripe_customer_id')
@@ -203,7 +227,6 @@ router.post('/portal', requireAuth, async (req, res, next) => {
       .single();
 
     if (!subscription) {
-      console.log(subscription)
       return res.status(404).json({ error: 'No active subscription found' });
     }
 

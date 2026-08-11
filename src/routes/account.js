@@ -45,12 +45,37 @@ router.post('/claim-daily', requireAuth, async (req, res, next) => {
 
     const reward = getReward(newStreak);
 
-    await supabase.from('account_balances').update({
-      balance:          account.balance + reward,
+    // Atomically claim the day: the update is gated on last_claim_date still
+    // holding the value we read, so concurrent requests can't claim twice.
+    let claim = supabase.from('account_balances').update({
       login_streak:     newStreak,
       last_claim_date:  today,
       updated_at:       new Date().toISOString(),
     }).eq('user_id', userId);
+
+    claim = account.last_claim_date === null
+      ? claim.is('last_claim_date', null)
+      : claim.eq('last_claim_date', account.last_claim_date);
+
+    const { data: claimed, error: claimError } = await claim.select('user_id');
+    if (claimError) throw claimError;
+
+    if (!claimed?.length) {
+      return res.status(400).json({
+        error: 'Already claimed today',
+        next_claim: 'tomorrow',
+      });
+    }
+
+    // Credit relative to the current balance (not the value read above) so a
+    // concurrently placed bet isn't clobbered.
+    if (reward > 0) {
+      const { error: creditError } = await supabase.rpc('adjust_account_balance', {
+        p_user_id: userId,
+        p_amount:  reward,
+      });
+      if (creditError) throw creditError;
+    }
 
     res.json({
       credits_awarded: reward,

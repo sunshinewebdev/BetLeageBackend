@@ -2,23 +2,30 @@ const express = require('express');
 const { z } = require('zod');
 const { requireAuth } = require('../middleware/auth');
 const { calculatePayout } = require('../services/oddsService');
+const { getServerOdds, eventIsBettable } = require('../lib/betValidation');
 const supabase = require('../lib/supabase');
 
 const router = express.Router();
 
 const PlaceBetSchema = z.object({
-  event_id:        z.string(),
+  event_id:        z.string().min(1).max(100),
   league_id:       z.string().uuid().optional().nullable(),
   tournament_id:   z.string().uuid().optional().nullable(),
   bet_type:        z.enum(['moneyline', 'spread', 'totals', 'prop']),
   selection:       z.enum(['home', 'away', 'over', 'under']),
-  selection_label: z.string(),
+  selection_label: z.string().min(1).max(200),
   american_odds:   z.number().int(),
   wager:           z.number().positive().max(10000),
-  prop_player:     z.string().optional().nullable(),
-  prop_market:     z.string().optional().nullable(),
+  prop_player:     z.string().max(100).optional().nullable(),
+  prop_market:     z.string().max(100).optional().nullable(),
   prop_line:       z.number().optional().nullable(),
-});
+}).refine(
+  b => !(b.league_id && b.tournament_id),
+  { message: 'A bet cannot belong to both a league and a tournament' },
+).refine(
+  b => b.bet_type !== 'prop' || (b.prop_player && b.prop_market && b.prop_line != null),
+  { message: 'Prop bets require prop_player, prop_market, and prop_line' },
+);
 
 // POST /api/bets
 router.post('/', requireAuth, async (req, res, next) => {
@@ -34,20 +41,49 @@ router.post('/', requireAuth, async (req, res, next) => {
     } = parsed.data;
     const userId = req.user.id;
 
-    // 1. Verify event is still upcoming
+    // 1. Verify event exists, is upcoming, and has not started
     const { data: event } = await supabase
-      .from('events').select('status').eq('id', event_id).single();
+      .from('events')
+      .select('id, status, commence_time, odds, props')
+      .eq('id', event_id)
+      .single();
 
-    if (!event || event.status !== 'upcoming') {
+    if (!eventIsBettable(event)) {
       return res.status(400).json({ error: 'Event is no longer open for betting' });
     }
 
-    const potential_payout = calculatePayout(wager, american_odds);
+    // 2. Never trust client odds — price the bet from the stored event odds
+    const { price: serverOdds, point: serverPoint, error: oddsError } = getServerOdds(event, parsed.data);
+    if (oddsError) {
+      return res.status(400).json({ error: oddsError });
+    }
+    if (serverOdds !== american_odds) {
+      return res.status(409).json({ error: 'Odds have changed — refresh and try again' });
+    }
+
+    const potential_payout = calculatePayout(wager, serverOdds);
+
+    // 3. Deduct the wager atomically (deduct_* RPCs only succeed when the
+    //    balance covers the wager, so concurrent bets can't double-spend)
     if (tournament_id) {
-      // ── Tournament bet: deduct from tournament_entries.balance ──
+      const { data: tournament } = await supabase
+        .from('tournaments')
+        .select('id, status, end_date')
+        .eq('id', tournament_id)
+        .single();
+
+      if (!tournament || tournament.status !== 'active') {
+        return res.status(400).json({ error: 'Tournament is not open for betting' });
+      }
+      // Chips locked in games beyond the window can't count in the final
+      // ranking — the event must start before the tournament ends.
+      if (new Date(event.commence_time) >= new Date(tournament.end_date)) {
+        return res.status(400).json({ error: 'Event starts after this tournament ends' });
+      }
+
       const { data: entry } = await supabase
         .from('tournament_entries')
-        .select('id, balance')
+        .select('id')
         .eq('tournament_id', tournament_id)
         .eq('user_id', userId)
         .single();
@@ -56,22 +92,21 @@ router.post('/', requireAuth, async (req, res, next) => {
         return res.status(400).json({ error: 'You have not entered this tournament' });
       }
 
-      if (entry.balance < wager) {
+      const { data: deducted, error: balanceError } = await supabase.rpc('deduct_tournament_balance', {
+        p_tournament_id: tournament_id,
+        p_user_id:       userId,
+        p_amount:        wager,
+      });
+
+      if (balanceError) throw balanceError;
+      if (!deducted) {
         return res.status(400).json({ error: 'Insufficient tournament balance' });
       }
 
-      const { error: balanceError } = await supabase
-        .from('tournament_entries')
-        .update({ balance: entry.balance - wager })
-        .eq('id', entry.id);
-
-      if (balanceError) throw balanceError;
-
     } else if (league_id) {
-      // ── League bet: deduct from league_members.balance ──
       const { data: member } = await supabase
         .from('league_members')
-        .select('id, balance')
+        .select('id')
         .eq('league_id', league_id)
         .eq('user_id', userId)
         .single();
@@ -80,36 +115,27 @@ router.post('/', requireAuth, async (req, res, next) => {
         return res.status(403).json({ error: 'You are not a member of this league' });
       }
 
-      if (member.balance < wager) {
+      const { data: deducted, error: balanceError } = await supabase.rpc('deduct_league_balance', {
+        p_league_id: league_id,
+        p_user_id:   userId,
+        p_amount:    wager,
+      });
+
+      if (balanceError) throw balanceError;
+      if (!deducted) {
         return res.status(400).json({ error: 'Insufficient league balance' });
       }
 
-      const { error: balanceError } = await supabase
-        .from('league_members')
-        .update({ balance: member.balance - wager, updated_at: new Date() })
-        .eq('league_id', league_id)
-        .eq('user_id', userId);
+    } else {
+      const { data: deducted, error: balanceError } = await supabase.rpc('deduct_account_balance', {
+        p_user_id: userId,
+        p_amount:  wager,
+      });
 
       if (balanceError) throw balanceError;
-
-    } else {
-      // ── Global bet: deduct from account_balances ─────────
-      const { data: balanceRow } = await supabase
-        .from('account_balances')
-        .select('balance')
-        .eq('user_id', userId)
-        .single();
-
-      if (!balanceRow || balanceRow.balance < wager) {
+      if (!deducted) {
         return res.status(400).json({ error: 'Insufficient account balance' });
       }
-
-      const { error: balanceError } = await supabase
-        .from('account_balances')
-        .update({ balance: balanceRow.balance - wager, updated_at: new Date() })
-        .eq('user_id', userId);
-
-      if (balanceError) throw balanceError;
     }
 
     // Insert the bet
@@ -123,7 +149,8 @@ router.post('/', requireAuth, async (req, res, next) => {
         bet_type,
         selection,
         selection_label,
-        american_odds,
+        american_odds: serverOdds,
+        line: serverPoint,
         wager,
         potential_payout,
         prop_player: prop_player || null,
@@ -136,24 +163,13 @@ router.post('/', requireAuth, async (req, res, next) => {
     if (betError) {
       // Rollback balance
       if (tournament_id) {
-        const { data: entry } = await supabase
-          .from('tournament_entries')
-          .select('id, balance')
-          .eq('tournament_id', tournament_id)
-          .eq('user_id', userId)
-          .single();
-
-        await supabase
-          .from('tournament_entries')
-          .update({ balance: entry.balance + wager })
-          .eq('id', entry.id);
+        await supabase.rpc('adjust_tournament_balance', {
+          p_tournament_id: tournament_id, p_user_id: userId, p_amount: wager,
+        });
       } else if (league_id) {
-        const { data: member } = await supabase
-          .from('league_members').select('balance')
-          .eq('league_id', league_id).eq('user_id', userId).single();
-        await supabase.from('league_members')
-          .update({ balance: member.balance + wager })
-          .eq('league_id', league_id).eq('user_id', userId);
+        await supabase.rpc('adjust_league_balance', {
+          p_league_id: league_id, p_user_id: userId, p_amount: wager,
+        });
       } else {
         await supabase.rpc('adjust_account_balance', {
           p_user_id: userId, p_amount: wager
@@ -172,6 +188,17 @@ router.post('/', requireAuth, async (req, res, next) => {
 router.get('/', requireAuth, async (req, res, next) => {
   try {
     const { league_id, tournament_id, source, status } = req.query;
+
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (league_id && league_id !== 'global' && !UUID_RE.test(league_id)) {
+      return res.status(400).json({ error: 'Invalid league_id' });
+    }
+    if (tournament_id && !UUID_RE.test(tournament_id)) {
+      return res.status(400).json({ error: 'Invalid tournament_id' });
+    }
+    if (status && !['pending', 'won', 'lost', 'void', 'pushed'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
 
     let query = supabase
       .from('bets')

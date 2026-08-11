@@ -8,6 +8,13 @@ router.get('/', async (req, res, next) => {
   try {
     const { sport, status = 'upcoming' } = req.query;
 
+    if (!['upcoming', 'live', 'completed'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+    if (sport && !['americanfootball_nfl', 'basketball_nba', 'baseball_mlb'].includes(sport)) {
+      return res.status(400).json({ error: 'Invalid sport' });
+    }
+
     let query = supabase
       .from('events')
       .select('*')

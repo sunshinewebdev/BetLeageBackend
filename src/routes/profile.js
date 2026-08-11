@@ -9,10 +9,13 @@ router.get('/:username', requireAuth, async (req, res, next) => {
   try {
     const { username } = req.params;
 
+    // Escape LIKE wildcards — otherwise "%25" in the URL matches any profile
+    const safeUsername = username.replace(/[\\%_]/g, '\\$&');
+
     const { data: profile, error: profileError } = await supabase
       .from('profiles')
       .select('id, username, avatar_url')
-      .ilike('username', username)
+      .ilike('username', safeUsername)
       .maybeSingle();
 
     if (profileError || !profile) {
@@ -22,7 +25,7 @@ router.get('/:username', requireAuth, async (req, res, next) => {
     const userId = profile.id;
     const today = new Date().toISOString().split('T')[0];
 
-    const [accountResp, betsResp, parlaysResp, tournamentsResp, leaguesResp] = await Promise.all([
+    const [accountResp, betsResp, parlaysResp, tournamentsResp, tournamentStatsResp, leaguesResp] = await Promise.all([
       supabase
         .from('account_balances')
         .select('*')
@@ -49,6 +52,13 @@ router.get('/:username', requireAuth, async (req, res, next) => {
         .not('final_rank', 'is', null)
         .order('joined_at', { ascending: false })
         .limit(20),
+      // Career stats over ALL settled tournaments — the query above is
+      // capped at 20 for the history list and would undercount
+      supabase
+        .from('tournament_entries')
+        .select('final_rank, payout')
+        .eq('user_id', userId)
+        .not('final_rank', 'is', null),
       supabase
         .from('league_members')
         .select(`
@@ -64,11 +74,12 @@ router.get('/:username', requireAuth, async (req, res, next) => {
         .limit(20),
     ]);
 
-    const account     = accountResp.data;
-    const bets        = betsResp.data       || [];
-    const parlays     = parlaysResp.data    || [];
-    const tournaments = tournamentsResp.data || [];
-    const leagues     = leaguesResp.data    || [];
+    const account         = accountResp.data;
+    const bets            = betsResp.data            || [];
+    const parlays         = parlaysResp.data         || [];
+    const tournaments     = tournamentsResp.data     || [];
+    const tournamentStats = tournamentStatsResp.data || [];
+    const leagues         = leaguesResp.data         || [];
 
     // ── Combined bet + parlay stats (settled only) ─────────────
     const allWagers  = [...bets, ...parlays];
@@ -88,9 +99,9 @@ router.get('/:username', requireAuth, async (req, res, next) => {
     const totalParlays = parlays.filter(p => ['won','lost','pushed'].includes(p.status)).length;
     const parlaysWon   = parlays.filter(p => p.status === 'won').length;
 
-    // ── Tournament stats ───────────────────────────────────────
-    const tournamentsWon     = tournaments.filter(t => t.final_rank === 1).length;
-    const tournamentEarnings = tournaments.reduce(
+    // ── Tournament stats (gross winnings, all settled tournaments) ──
+    const tournamentsWon     = tournamentStats.filter(t => t.final_rank === 1).length;
+    const tournamentEarnings = tournamentStats.reduce(
       (sum, t) => sum + (Number(t.payout) || 0),
       0
     );

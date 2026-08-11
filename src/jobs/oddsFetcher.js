@@ -2,8 +2,6 @@ const cron = require('node-cron');
 const { SPORTS, fetchEventsWithOdds, fetchEventProps, normalizeEvent } = require('../services/oddsService');
 const supabase = require('../lib/supabase');
 
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
 const INTERVAL = parseInt(process.env.ODDS_FETCH_INTERVAL || '4');
 
 async function runOddsFetch() {
@@ -59,8 +57,9 @@ function startOddsFetcher() {
   // Run immediately on startup
   runOddsFetch();
 
-  // Then on schedule
-  const schedule = `0 ${INTERVAL} * * *`;
+  // Then on schedule — every INTERVAL minutes (the previous `0 N * * *`
+  // ran once daily at N:00)
+  const schedule = `*/${INTERVAL} * * * *`;
   cron.schedule(schedule, runOddsFetch);
   console.log(`[OddsFetcher] Scheduled every ${INTERVAL} minutes`);
 }
