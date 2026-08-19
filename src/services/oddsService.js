@@ -5,6 +5,7 @@ const API_KEY  = process.env.ODDS_API_KEY;
 
 const SPORTS = [
   'americanfootball_nfl',
+  'americanfootball_ncaaf',
   'basketball_nba',
   'baseball_mlb',
 ];
@@ -95,6 +96,13 @@ function calculatePayout(wager, americanOdds) {
 // ── Prop markets by sport ─────────────────────────────────
 const PROP_MARKETS = {
   americanfootball_nfl: [
+    'player_pass_yds',
+    'player_rush_yds',
+    'player_reception_yds',
+    'player_pass_tds',
+    'player_receptions',
+  ],
+  americanfootball_ncaaf: [
     'player_pass_yds',
     'player_rush_yds',
     'player_reception_yds',

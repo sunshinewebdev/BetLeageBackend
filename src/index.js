@@ -80,7 +80,7 @@ app.use((err, req, res, next) => {
 // ── Start ───────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`BetLeague API running on :${PORT}`);
-  // startOddsFetcher();
-  // startScoresSettler();
-  // startTournamentManager();
+  startOddsFetcher();
+  startScoresSettler();
+  startTournamentManager();
 });

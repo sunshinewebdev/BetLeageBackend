@@ -1,9 +1,15 @@
 const axios = require('axios');
 
 const BASE_URLS = {
-  basketball_nba:       'https://api.balldontlie.io/v1',
-  americanfootball_nfl: 'https://api.balldontlie.io/nfl/v1',
-  baseball_mlb:         'https://api.balldontlie.io/mlb/v1',
+  basketball_nba:         'https://api.balldontlie.io/v1',
+  americanfootball_nfl:   'https://api.balldontlie.io/nfl/v1',
+  americanfootball_ncaaf: 'https://api.balldontlie.io/ncaaf/v1',
+  baseball_mlb:           'https://api.balldontlie.io/mlb/v1',
+};
+
+// NCAAF exposes player game stats at /player_stats; every other league uses /stats
+const STATS_PATHS = {
+  americanfootball_ncaaf: 'player_stats',
 };
 const API_KEY = process.env.BALLDONTLIE_API_KEY;
 
@@ -12,6 +18,13 @@ const headers = API_KEY ? { Authorization: API_KEY } : {};
 // Per-sport stat maps: market key → accessor function over player stats
 const STAT_MAPS = {
   americanfootball_nfl: {
+    player_pass_yds:      s => s.passing_yards       ?? 0,
+    player_rush_yds:      s => s.rushing_yards       ?? 0,
+    player_reception_yds: s => s.receiving_yards     ?? 0,
+    player_pass_tds:      s => s.passing_touchdowns  ?? 0,
+    player_receptions:    s => s.receptions          ?? 0,
+  },
+  americanfootball_ncaaf: {
     player_pass_yds:      s => s.passing_yards       ?? 0,
     player_rush_yds:      s => s.rushing_yards       ?? 0,
     player_reception_yds: s => s.receiving_yards     ?? 0,
@@ -39,7 +52,8 @@ async function fetchGameStats(sport, gameId) {
   const baseUrl = BASE_URLS[sport];
   if (!baseUrl) return [];
 
-  const { data } = await axios.get(`${baseUrl}/stats`, {
+  const statsPath = STATS_PATHS[sport] || 'stats';
+  const { data } = await axios.get(`${baseUrl}/${statsPath}`, {
     params: { game_ids: [gameId] },
     headers,
   });

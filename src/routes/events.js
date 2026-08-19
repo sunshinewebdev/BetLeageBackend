@@ -1,5 +1,6 @@
 const express = require('express');
 const supabase = require('../lib/supabase');
+const { SPORTS } = require('../services/oddsService');
 
 const router = express.Router();
 
@@ -11,7 +12,7 @@ router.get('/', async (req, res, next) => {
     if (!['upcoming', 'live', 'completed'].includes(status)) {
       return res.status(400).json({ error: 'Invalid status' });
     }
-    if (sport && !['americanfootball_nfl', 'basketball_nba', 'baseball_mlb'].includes(sport)) {
+    if (sport && !SPORTS.includes(sport)) {
       return res.status(400).json({ error: 'Invalid sport' });
     }
 
