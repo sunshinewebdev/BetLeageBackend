@@ -301,7 +301,7 @@ async function runScoresCheck() {
 function startScoresSettler() {
   runScoresCheck();
   // every INTERVAL minutes (the previous `0 N * * *` ran once daily at N:00)
-  const schedule = `*/${INTERVAL} * * * *`;
+  const schedule = `* ${INTERVAL} * * * *`;
   cron.schedule(schedule, runScoresCheck);
   console.log(`[ScoresSettler] Scheduled every ${INTERVAL} minutes`);
 }
