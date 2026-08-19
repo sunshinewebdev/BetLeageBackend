@@ -3,7 +3,8 @@ const { SPORTS, fetchScores } = require('../services/oddsService');
 const { fetchGameStats, getStatValue, findGameId } = require('../services/balldontlieService');
 const supabase = require('../lib/supabase');
 
-const INTERVAL = parseInt(process.env.SCORES_FETCH_INTERVAL || '4');
+// Comma-separated hours of the day to check scores at (cron hour field syntax)
+const HOURS = process.env.SCORES_FETCH_HOURS || '0,6,12,18';
 
 const AMBIGUOUS = Symbol('ambiguous-player');
 
@@ -300,10 +301,10 @@ async function runScoresCheck() {
 
 function startScoresSettler() {
   runScoresCheck();
-  // every INTERVAL minutes (the previous `0 N * * *` ran once daily at N:00)
-  const schedule = `* ${INTERVAL} * * * *`;
+  // At the top of each configured hour (5 fields: minute hour dom month dow)
+  const schedule = `0 ${HOURS} * * *`;
   cron.schedule(schedule, runScoresCheck);
-  console.log(`[ScoresSettler] Scheduled every ${INTERVAL} minutes`);
+  console.log(`[ScoresSettler] Scheduled at hours ${HOURS}`);
 }
 
 module.exports = { startScoresSettler };

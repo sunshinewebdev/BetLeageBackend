@@ -2,7 +2,8 @@ const cron = require('node-cron');
 const { SPORTS, fetchEventsWithOdds, fetchEventProps, normalizeEvent } = require('../services/oddsService');
 const supabase = require('../lib/supabase');
 
-const INTERVAL = parseInt(process.env.ODDS_FETCH_INTERVAL || '4');
+// Comma-separated hours of the day to fetch at (cron hour field syntax)
+const HOURS = process.env.ODDS_FETCH_HOURS || '0,6,12,18';
 
 async function runOddsFetch() {
   console.log(`[OddsFetcher] Starting fetch at ${new Date().toISOString()}`);
@@ -57,11 +58,10 @@ function startOddsFetcher() {
   // Run immediately on startup
   runOddsFetch();
 
-  // Then on schedule — every INTERVAL minutes (the previous `0 N * * *`
-  // ran once daily at N:00)
-  const schedule = `* ${INTERVAL} * * * *`;
+  // Then at the top of each configured hour (5 fields: minute hour dom month dow)
+  const schedule = `0 ${HOURS} * * *`;
   cron.schedule(schedule, runOddsFetch);
-  console.log(`[OddsFetcher] Scheduled every ${INTERVAL} minutes`);
+  console.log(`[OddsFetcher] Scheduled at hours ${HOURS}`);
 }
 
 module.exports = { startOddsFetcher };
