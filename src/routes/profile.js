@@ -1,8 +1,33 @@
 const express = require('express');
 const { requireAuth } = require('../middleware/auth');
 const supabase = require('../lib/supabase');
+const cache = require('../lib/ttlCache');
 
 const router = express.Router();
+
+// Global leaderboard ranks for one user, keyed "category:period".
+// Missing keys mean unranked (no qualifying wagers / below win% minimum).
+async function getGlobalRanks(userId) {
+  const key = `ranks:${userId}`;
+  let ranks = cache.get(key);
+  if (!ranks) {
+    try {
+      const { data, error } = await supabase.rpc('global_leaderboard_user_ranks', {
+        p_user_id: userId,
+      });
+      if (error) throw error;
+      ranks = Object.fromEntries((data || []).map(r => [
+        `${r.category}:${r.period}`,
+        { rank: Number(r.rank), value: Number(r.value), detail: r.detail },
+      ]));
+    } catch (err) {
+      console.error(`[Profile] global ranks failed for ${userId}:`, err.message);
+      return {}; // don't fail the whole profile over rank lookup
+    }
+    cache.set(key, ranks, 5 * 60_000);
+  }
+  return ranks;
+}
 
 // GET /api/profile/:username — public profile by username
 router.get('/:username', requireAuth, async (req, res, next) => {
@@ -106,6 +131,8 @@ router.get('/:username', requireAuth, async (req, res, next) => {
       0
     );
 
+    const globalRanks = await getGlobalRanks(userId);
+
     // ── League history with ranks ──────────────────────────────
     const leagueHistory = await Promise.all(
       leagues.map(async (lm) => {
@@ -140,6 +167,7 @@ router.get('/:username', requireAuth, async (req, res, next) => {
       parlays_won:         parlaysWon,
       tournaments_won:     tournamentsWon,
       tournament_earnings: tournamentEarnings,
+      global_ranks:        globalRanks,
       tournament_history:  tournaments.map(te => ({
         ...te.tournaments,
         final_rank:    te.final_rank,
