@@ -88,7 +88,7 @@ router.get('/:username', requireAuth, async (req, res, next) => {
         .from('league_members')
         .select(`
           balance, joined_at,
-          leagues (
+          leagues!inner (
             id, name, start_date, end_date,
             starting_chips, is_public
           )

@@ -126,12 +126,17 @@ router.post('/', requireAuth, async (req, res, next) => {
     } else if (league_id) {
       const { data: member } = await supabase
         .from('league_members')
-        .select('id')
+        .select('id, leagues!inner(end_date)')
         .eq('league_id', league_id)
         .eq('user_id', userId)
         .single();
 
       if (!member) return res.status(403).json({ error: 'You are not a member of this league' });
+
+      const today = new Date().toISOString().split('T')[0];
+      if (member.leagues?.end_date && member.leagues.end_date < today) {
+        return res.status(400).json({ error: 'This league has ended' });
+      }
 
       const { data: deducted, error } = await supabase.rpc('deduct_league_balance', {
         p_league_id: league_id,
