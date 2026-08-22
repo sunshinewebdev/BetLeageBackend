@@ -76,14 +76,14 @@ router.get('/:id/leaderboard', requireAuth, async (req, res, next) => {
 
     if (error) throw error;
 
-    // Get bet stats per user for this tournament
-    const { data: bets } = await supabase
-      .from('bets')
-      .select('user_id, status')
-      .eq('tournament_id', tournamentId);
+    // Get wager stats per user for this tournament (straight bets + parlays)
+    const [{ data: bets }, { data: parlays }] = await Promise.all([
+      supabase.from('bets').select('user_id, status').eq('tournament_id', tournamentId),
+      supabase.from('parlays').select('user_id, status').eq('tournament_id', tournamentId),
+    ]);
 
     const betStats = {};
-    for (const b of (bets || [])) {
+    for (const b of [...(bets || []), ...(parlays || [])]) {
       if (!betStats[b.user_id]) betStats[b.user_id] = { total: 0, won: 0, lost: 0 };
       if (b.status !== 'void') betStats[b.user_id].total++;
       if (b.status === 'won') betStats[b.user_id].won++;
