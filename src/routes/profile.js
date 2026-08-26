@@ -53,7 +53,7 @@ router.get('/:username', requireAuth, async (req, res, next) => {
     yesterday.setDate(yesterday.getDate() - 1);
     const yesterdayStr = yesterday.toISOString().split('T')[0];
 
-    const [accountResp, betsResp, parlaysResp, tournamentsResp, tournamentStatsResp, leaguesResp] = await Promise.all([
+    const [accountResp, betsResp, parlaysResp, tournamentsResp, tournamentStatsResp] = await Promise.all([
       supabase
         .from('account_balances')
         .select('*')
@@ -87,19 +87,6 @@ router.get('/:username', requireAuth, async (req, res, next) => {
         .select('final_rank, payout')
         .eq('user_id', userId)
         .not('final_rank', 'is', null),
-      supabase
-        .from('league_members')
-        .select(`
-          balance, joined_at,
-          leagues!inner (
-            id, name, start_date, end_date,
-            starting_chips, is_public
-          )
-        `)
-        .eq('user_id', userId)
-        .lt('leagues.end_date', today)
-        .order('joined_at', { ascending: false })
-        .limit(20),
     ]);
 
     const account         = accountResp.data;
@@ -110,7 +97,6 @@ router.get('/:username', requireAuth, async (req, res, next) => {
     const parlays         = parlaysResp.data         || [];
     const tournaments     = tournamentsResp.data     || [];
     const tournamentStats = tournamentStatsResp.data || [];
-    const leagues         = leaguesResp.data         || [];
 
     // ── Combined bet + parlay stats (settled only) ─────────────
     const allWagers  = [...bets, ...parlays];
@@ -139,27 +125,6 @@ router.get('/:username', requireAuth, async (req, res, next) => {
 
     const globalRanks = await getGlobalRanks(userId);
 
-    // ── League history with ranks ──────────────────────────────
-    const leagueHistory = await Promise.all(
-      leagues.map(async (lm) => {
-        if (!lm.leagues) return null;
-        const { data: lb } = await supabase
-          .from('leaderboard')
-          .select('rank, profit_loss, win_rate, total_bets')
-          .eq('league_id', lm.leagues.id)
-          .eq('user_id', userId)
-          .maybeSingle();
-        return {
-          ...lm.leagues,
-          final_balance: lm.balance,
-          rank:          lb?.rank ?? null,
-          profit_loss:   lb?.profit_loss ?? 0,
-          win_rate:      lb?.win_rate ?? 0,
-          total_bets:    lb?.total_bets ?? 0,
-        };
-      })
-    );
-
     res.json({
       user_id:             profile.id,
       username:            profile.username,
@@ -180,7 +145,6 @@ router.get('/:username', requireAuth, async (req, res, next) => {
         payout:        te.payout,
         final_balance: te.balance,
       })),
-      league_history: leagueHistory.filter(Boolean),
     });
   } catch (err) {
     next(err);
@@ -199,7 +163,7 @@ router.get('/me/leagues/past', requireAuth, async (req, res, next) => {
         joined_at,
         leagues!inner (
           id, name, start_date, end_date,
-          starting_chips, invite_code, is_public, created_by
+          starting_chips, invite_code, created_by
         )
       `)
       .eq('user_id', req.user.id)

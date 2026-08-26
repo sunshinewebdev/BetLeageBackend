@@ -10,7 +10,6 @@ router.post('/', requireAuth, async (req, res, next) => {
   try {
     const schema = z.object({
       name:           z.string().min(2).max(50),
-      is_public:      z.boolean().optional().default(false),
       start_date:     z.string(),
       end_date:       z.string(),
       starting_chips: z.number().int().min(100).max(1000000).default(1000),
