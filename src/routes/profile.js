@@ -49,6 +49,9 @@ router.get('/:username', requireAuth, async (req, res, next) => {
 
     const userId = profile.id;
     const today = new Date().toISOString().split('T')[0];
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = yesterday.toISOString().split('T')[0];
 
     const [accountResp, betsResp, parlaysResp, tournamentsResp, tournamentStatsResp, leaguesResp] = await Promise.all([
       supabase
@@ -100,6 +103,9 @@ router.get('/:username', requireAuth, async (req, res, next) => {
     ]);
 
     const account         = accountResp.data;
+    // A streak only counts if the last claim was today or yesterday — otherwise it has lapsed
+    const streakAlive =
+      account?.last_claim_date === today || account?.last_claim_date === yesterdayStr;
     const bets            = betsResp.data            || [];
     const parlays         = parlaysResp.data         || [];
     const tournaments     = tournamentsResp.data     || [];
@@ -159,7 +165,7 @@ router.get('/:username', requireAuth, async (req, res, next) => {
       username:            profile.username,
       avatar_url:          profile.avatar_url,
       is_premium:          account?.is_premium ?? false,
-      login_streak:        account?.login_streak ?? 0,
+      login_streak:        streakAlive ? (account?.login_streak ?? 0) : 0,
       total_bets:          totalBets,
       win_rate:            winRate,
       biggest_win:         biggestWin,

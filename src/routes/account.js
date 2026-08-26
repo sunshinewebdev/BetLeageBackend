@@ -116,12 +116,22 @@ router.get('/me', requireAuth, async (req, res, next) => {
     const data         = accountRes.data;
     const profile      = profileRes.data;
     const subscription = subRes.data;
-    const today      = new Date().toISOString().split('T')[0];
+    const today = new Date().toISOString().split('T')[0];
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = yesterday.toISOString().split('T')[0];
+
+    // A streak only counts if the last claim was today or yesterday — otherwise
+    // it has lapsed and the next claim will reset to day 1 (see /claim-daily).
+    const streakAlive =
+      data.last_claim_date === today || data.last_claim_date === yesterdayStr;
+    const effectiveStreak = streakAlive ? (data.login_streak || 0) : 0;
     const canClaim   = data.last_claim_date !== today;
-    const nextReward = getReward((data.login_streak || 0) + 1);
+    const nextReward = getReward(effectiveStreak + 1);
 
     res.json({
       ...data,
+      login_streak:         effectiveStreak,
       username:             profile?.username ?? null,
       avatar_url:           profile?.avatar_url ?? null,
       can_claim:            canClaim,
